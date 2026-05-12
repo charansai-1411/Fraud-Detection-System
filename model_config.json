@@ -1,0 +1,4 @@
+{
+  "best_threshold": 0.01,
+  "note": "Model trained with SMOTE \u2014 probs are low. Retrain with scale_pos_weight for better calibration."
+}

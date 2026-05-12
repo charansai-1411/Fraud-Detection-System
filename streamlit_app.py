@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import pickle
+import json
 import shap
 import matplotlib.pyplot as plt
 import matplotlib
@@ -25,8 +26,33 @@ def load_model():
         st.error(f"❌ Error loading model: {str(e)}")
         return None
 
-model = load_model()
-THRESHOLD = 0.89
+# ── Load Scalers ─────────────────────────────────────────────
+# FIX: Load the training scalers so inference uses the SAME scaling as training.
+# Previously the app created a brand-new StandardScaler() and fit it on the
+# uploaded data — a completely different distribution from training.
+@st.cache_resource
+def load_scalers():
+    try:
+        with open('scaler.pkl', 'rb') as f:
+            return pickle.load(f)   # returns {'amount_scaler': ..., 'time_scaler': ...}
+    except Exception as e:
+        st.warning(f"⚠️ Could not load scaler.pkl: {e}. Falling back to fresh scaling.")
+        return None
+
+# ── Load Threshold from Config ────────────────────────────────
+# FIX: Read the threshold computed by the notebook (best F1 on validation set)
+# instead of hardcoding 0.89 which only worked on the internal test split.
+def load_config():
+    try:
+        with open('model_config.json') as f:
+            return json.load(f)
+    except Exception:
+        return {'best_threshold': 0.5}
+
+model   = load_model()
+scalers = load_scalers()
+config  = load_config()
+DEFAULT_THRESHOLD = float(config.get('best_threshold', 0.5))
 
 # Stop execution if model failed to load
 if model is None:
@@ -40,13 +66,13 @@ st.divider()
 # ── Sidebar ──────────────────────────────────────────────────
 st.sidebar.header("⚙️ Settings")
 threshold = st.sidebar.slider(
-    "Classification Threshold", 
-    min_value=0.1, max_value=0.99, 
-    value=0.89, step=0.01,
-    help="Higher = fewer false alarms, may miss some fraud"
+    "Classification Threshold",
+    min_value=0.01, max_value=0.99,
+    value=DEFAULT_THRESHOLD, step=0.01,
+    help="Loaded from model_config.json (best F1 threshold). Higher = fewer false alarms, may miss some fraud."
 )
-show_shap = st.sidebar.checkbox("Show SHAP Explanations", value=True)
-max_explain = st.sidebar.slider("Max transactions to explain", 1, 20, 5)
+show_shap   = st.sidebar.checkbox("Show SHAP Explanations", value=True)
+max_explain = st.sidebar.slider("Max transactions to explain", 1, 20, 4)
 
 st.sidebar.divider()
 st.sidebar.markdown("### 📊 Model Performance")
@@ -64,18 +90,27 @@ uploaded_file = st.file_uploader("Choose a CSV file", type=['csv'])
 if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
 
-    # Drop Class column if present
+    # Separate ground truth if present
     true_labels = None
     if 'Class' in df.columns:
         true_labels = df['Class'].values
         df = df.drop('Class', axis=1)
 
-    # Scale Amount and Time if raw
-    if 'Amount' in df.columns:
-        from sklearn.preprocessing import StandardScaler
-        sc = StandardScaler()
-        df['Amount_scaled'] = sc.fit_transform(df[['Amount']])
-        df['Time_scaled'] = sc.fit_transform(df[['Time']])
+    # ── Scaling ──────────────────────────────────────────────
+    # FIX: Use the SAVED training scalers (transform only — never fit on new data).
+    # If the CSV already has Amount_scaled / Time_scaled (pre-processed format),
+    # skip this block entirely.
+    if 'Amount' in df.columns and 'Time' in df.columns:
+        if scalers is not None:
+            # Correct path: use training distribution statistics
+            df['Amount_scaled'] = scalers['amount_scaler'].transform(df[['Amount']])
+            df['Time_scaled']   = scalers['time_scaler'].transform(df[['Time']])
+        else:
+            # Fallback (scaler.pkl missing) — warn user, results may be less accurate
+            from sklearn.preprocessing import StandardScaler
+            st.warning("⚠️ scaler.pkl not found — using fallback scaling. Re-run the notebook to generate it.")
+            df['Amount_scaled'] = StandardScaler().fit_transform(df[['Amount']])
+            df['Time_scaled']   = StandardScaler().fit_transform(df[['Time']])
         df = df.drop(['Amount', 'Time'], axis=1)
 
     st.success(f"✅ Loaded {len(df)} transactions")
@@ -93,7 +128,7 @@ if uploaded_file is not None:
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Total Transactions", len(df))
-    col2.metric("🚨 Flagged as Fraud", int(fraud_count), 
+    col2.metric("🚨 Flagged as Fraud", int(fraud_count),
                 delta=f"{fraud_count/len(df)*100:.1f}%", delta_color="inverse")
     col3.metric("✅ Legitimate", int(legit_count))
     col4.metric("Threshold Used", f"{threshold:.2f}")
@@ -103,10 +138,10 @@ if uploaded_file is not None:
     st.subheader("📋 Transaction Results")
 
     results_df = pd.DataFrame({
-        'Transaction #': range(1, len(df)+1),
+        'Transaction #':    range(1, len(df)+1),
         'Fraud Probability': [f"{p:.4f}" for p in probs],
-        'Prediction': ['🚨 FRAUD' if p == 1 else '✅ Legit' for p in preds],
-        'Risk Level': ['HIGH' if p >= 0.8 else 'MEDIUM' if p >= 0.5 else 'LOW' for p in probs]
+        'Prediction':        ['🚨 FRAUD' if p == 1 else '✅ Legit' for p in preds],
+        'Risk Level':        ['HIGH' if p >= 0.8 else 'MEDIUM' if p >= 0.5 else 'LOW' for p in probs]
     })
 
     if true_labels is not None:
@@ -114,7 +149,6 @@ if uploaded_file is not None:
         correct = (preds == true_labels).sum()
         st.info(f"Ground truth available — Correct predictions: {correct}/{len(df)}")
 
-    # Color fraud rows red
     def highlight_fraud(row):
         if '🚨' in row['Prediction']:
             return ['background-color: #ffcccc'] * len(row)
@@ -130,11 +164,11 @@ if uploaded_file is not None:
     st.subheader("📈 Fraud Probability Distribution")
 
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.hist(probs[preds==0], bins=50, alpha=0.7, 
+    ax.hist(probs[preds==0], bins=50, alpha=0.7,
             color='steelblue', label='Predicted Legit')
-    ax.hist(probs[preds==1], bins=50, alpha=0.7, 
+    ax.hist(probs[preds==1], bins=50, alpha=0.7,
             color='crimson', label='Predicted Fraud')
-    ax.axvline(x=threshold, color='black', linestyle='--', 
+    ax.axvline(x=threshold, color='black', linestyle='--',
                linewidth=2, label=f'Threshold = {threshold:.2f}')
     ax.set_xlabel('Fraud Probability')
     ax.set_ylabel('Count')
@@ -149,7 +183,7 @@ if uploaded_file is not None:
         st.divider()
         st.subheader("🧠 SHAP Explanations — Why These Were Flagged")
 
-        explainer = shap.TreeExplainer(model)
+        explainer    = shap.TreeExplainer(model)
         fraud_indices = np.where(preds == 1)[0][:max_explain]
 
         for i, idx in enumerate(fraud_indices):
@@ -179,8 +213,8 @@ else:
     st.subheader("📌 How to use")
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.markdown("**1. Upload CSV**\nUpload transaction data in creditcard.csv format")
+        st.markdown("**1. Upload CSV**\nUpload transaction data in creditcard.csv format (V1-V28, Amount, Time, optional Class)")
     with col2:
-        st.markdown("**2. Adjust Threshold**\nUse sidebar to tune precision vs recall tradeoff")
+        st.markdown("**2. Adjust Threshold**\nDefault is the best F1 threshold from training. Use sidebar to tune precision vs recall.")
     with col3:
         st.markdown("**3. Review Results**\nSee flagged transactions with SHAP explanations")
