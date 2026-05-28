@@ -7,7 +7,7 @@ import queue
 import threading
 import os
 import matplotlib.pyplot as plt
-import seaborn as sns  # (Not imported or needed — kept comments for legacy)
+# import seaborn as sns  # (Not imported or needed — kept comments for legacy)
 
 # Set page layout to wide and add premium custom page styling
 st.set_page_config(
