@@ -65,7 +65,7 @@ st.markdown("""
         -webkit-backdrop-filter: blur(5px);
     }
     </style>
-""", unsafe_allowed_html=True)
+""", unsafe_allow_html=True)
 
 # Define thread-safe queue for sharing Kafka events
 if 'event_queue' not in st.session_state:
@@ -126,7 +126,7 @@ if 'consumer_started' not in st.session_state:
 
 # ── Sidebar Configurations ─────────────────────────────────────────
 st.sidebar.image("https://img.icons8.com/nolan/128/security-shield.png", width=70)
-st.sidebar.markdown("<h2 style='margin-top:0;'>🛡️ FRAUD GUARD</h2>", unsafe_allowed_html=True)
+st.sidebar.markdown("<h2 style='margin-top:0;'>🛡️ FRAUD GUARD</h2>", unsafe_allow_html=True)
 st.sidebar.divider()
 
 # Status indicator
@@ -136,7 +136,7 @@ if st.session_state.kafka_connected:
             <span style="height: 8px; width: 8px; background-color: #dc3545; border-radius: 50%; display: inline-block;"></span>
             LIVE FEED ACTIVE
         </div>
-    """, unsafe_allowed_html=True)
+    """, unsafe_allow_html=True)
 else:
     st.sidebar.warning("🛑 Kafka offline / Connecting...")
 
@@ -161,13 +161,13 @@ if st.sidebar.button("Clear Dashboard Memory", type="secondary"):
 # ── Title Header ──────────────────────────────────────────────
 col_title, col_status = st.columns([4, 1], vertical_alignment="center")
 with col_title:
-    st.markdown('<div class="title-gradient">Real-Time Fraud Guard</div>', unsafe_allowed_html=True)
+    st.markdown('<div class="title-gradient">Real-Time Fraud Guard</div>', unsafe_allow_html=True)
     st.markdown("##### Real-Time Credit Card Fraud Detection Powered by Apache Kafka & Spark Structured Streaming")
 with col_status:
     if st.session_state.kafka_connected:
-        st.markdown("<p style='text-align:right;'><span class='status-live'>🔴 LIVE KAFKA INGEST</span></p>", unsafe_allowed_html=True)
+        st.markdown("<p style='text-align:right;'><span class='status-live'>🔴 LIVE KAFKA INGEST</span></p>", unsafe_allow_html=True)
     else:
-        st.markdown("<p style='text-align:right;'><span style='color:#ffc107;'>⏳ WAITING FOR KAFKA</span></p>", unsafe_allowed_html=True)
+        st.markdown("<p style='text-align:right;'><span style='color:#ffc107;'>⏳ WAITING FOR KAFKA</span></p>", unsafe_allow_html=True)
 
 st.divider()
 
