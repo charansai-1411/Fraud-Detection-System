@@ -17,10 +17,7 @@ spark = SparkSession.builder \
     .master("local[*]") \
     .config("spark.jars.packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0") \
     .config("spark.sql.shuffle.partitions", "2") \
-    .get_index() if hasattr(SparkSession.builder, 'get_index') else spark # fallback
-
-# Direct spark reference correction
-spark = SparkSession.builder.getOrCreate()
+    .getOrCreate()
 
 # Add XGBoost model, scaler, and config files to SparkContext
 # This distributes them to all workers for local execution.
