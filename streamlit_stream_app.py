@@ -7,8 +7,7 @@ import queue
 import threading
 import os
 import matplotlib.pyplot as plt
-from kafka import KafkaConsumer
-from kafka.errors import NoBrokersAvailable
+import seaborn as sns  # (Not imported or needed — kept comments for legacy)
 
 # Set page layout to wide and add premium custom page styling
 st.set_page_config(
@@ -89,13 +88,52 @@ def load_best_threshold():
 
 BEST_THRESHOLD = load_best_threshold()
 
-# Kafka consumer configuration
+# ── Load Model & Scaler for Self-Contained Cloud Demo ───────────────
+@st.cache_resource
+def load_app_resources():
+    import pickle
+    try:
+        with open('fraud_model.pkl', 'rb') as f:
+            model = pickle.load(f)
+        with open('scaler.pkl', 'rb') as f:
+            scaler = pickle.load(f)
+        return model, scaler
+    except Exception as e:
+        print(f"Error loading resources: {e}")
+        return None, None
+
+@st.cache_data
+def load_simulation_data():
+    candidate_files = [
+        "sample_transactions (1).csv",
+        "sample_transactions_with_fraud(1).csv",
+        "sample_transactions.csv"
+    ]
+    for f in candidate_files:
+        if os.path.exists(f):
+            return pd.read_csv(f)
+    return None
+
+# ── Sidebar Configurations ─────────────────────────────────────────
+st.sidebar.image("https://img.icons8.com/nolan/128/security-shield.png", width=70)
+st.sidebar.markdown("<h2 style='margin-top:0;'>🛡️ FRAUD GUARD</h2>", unsafe_allow_html=True)
+st.sidebar.divider()
+
+# Connection Mode Selection (Crucial for Cloud Deployment)
+st.sidebar.subheader("🔌 Connection Mode")
+system_mode = st.sidebar.radio(
+    "Select Dashboard Mode",
+    ["🚀 Cloud Demo (Auto-Run)", "🔌 Enterprise Kafka Stream"],
+    help="Demo mode runs fully in the cloud using standard ML. Enterprise mode connects to your local or cloud Kafka+Spark stream."
+)
+
+# ── Kafka Background consumer settings ─────────────────────────────
 KAFKA_BROKER = os.getenv("KAFKA_BROKER", "localhost:9092")
 ALERTS_TOPIC = os.getenv("ALERTS_TOPIC", "fraud_alerts")
 
-# Background thread for consuming from Kafka
 def kafka_consumer_thread(broker_addr, topic_name, q):
     print("Background consumer thread started.")
+    from kafka import KafkaConsumer
     consumer = None
     try:
         consumer = KafkaConsumer(
@@ -114,31 +152,35 @@ def kafka_consumer_thread(broker_addr, topic_name, q):
         if consumer:
             consumer.close()
 
-# Start consumer thread once
-if 'consumer_started' not in st.session_state:
-    st.session_state.consumer_started = True
-    t = threading.Thread(
-        target=kafka_consumer_thread,
-        args=(KAFKA_BROKER, ALERTS_TOPIC, st.session_state.event_queue),
-        daemon=True
-    )
-    t.start()
-
-# ── Sidebar Configurations ─────────────────────────────────────────
-st.sidebar.image("https://img.icons8.com/nolan/128/security-shield.png", width=70)
-st.sidebar.markdown("<h2 style='margin-top:0;'>🛡️ FRAUD GUARD</h2>", unsafe_allow_html=True)
-st.sidebar.divider()
+# Start consumer thread ONLY in Kafka mode
+if system_mode == "🔌 Enterprise Kafka Stream":
+    if 'consumer_started' not in st.session_state:
+        st.session_state.consumer_started = True
+        t = threading.Thread(
+            target=kafka_consumer_thread,
+            args=(KAFKA_BROKER, ALERTS_TOPIC, st.session_state.event_queue),
+            daemon=True
+        )
+        t.start()
 
 # Status indicator
-if st.session_state.kafka_connected:
+if system_mode == "🚀 Cloud Demo (Auto-Run)":
     st.sidebar.markdown("""
-        <div class="status-live">
-            <span style="height: 8px; width: 8px; background-color: #dc3545; border-radius: 50%; display: inline-block;"></span>
-            LIVE FEED ACTIVE
+        <div class="status-live" style="background-color: rgba(40, 167, 69, 0.2); color: #28a745; border: 1px solid #28a745;">
+            <span style="height: 8px; width: 8px; background-color: #28a745; border-radius: 50%; display: inline-block;"></span>
+            CLOUD AUTO-DEMO ACTIVE
         </div>
     """, unsafe_allow_html=True)
 else:
-    st.sidebar.warning("🛑 Kafka offline / Connecting...")
+    if st.session_state.kafka_connected:
+        st.sidebar.markdown("""
+            <div class="status-live">
+                <span style="height: 8px; width: 8px; background-color: #dc3545; border-radius: 50%; display: inline-block;"></span>
+                LIVE FEED ACTIVE
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.sidebar.warning("🛑 Kafka offline / Connecting...")
 
 st.sidebar.subheader("⚙️ Stream Controls")
 buffer_size = st.sidebar.slider("Live table buffer size", 10, 500, 100, 10)
@@ -164,61 +206,107 @@ with col_title:
     st.markdown('<div class="title-gradient">Real-Time Fraud Guard</div>', unsafe_allow_html=True)
     st.markdown("##### Real-Time Credit Card Fraud Detection Powered by Apache Kafka & Spark Structured Streaming")
 with col_status:
-    if st.session_state.kafka_connected:
-        st.markdown("<p style='text-align:right;'><span class='status-live'>🔴 LIVE KAFKA INGEST</span></p>", unsafe_allow_html=True)
+    if system_mode == "🚀 Cloud Demo (Auto-Run)":
+        st.markdown("<p style='text-align:right;'><span class='status-live' style='background-color: rgba(40, 167, 69, 0.2); color: #28a745; border: 1px solid #28a745;'>🟢 AUTO INGEST</span></p>", unsafe_allow_html=True)
     else:
-        st.markdown("<p style='text-align:right;'><span style='color:#ffc107;'>⏳ WAITING FOR KAFKA</span></p>", unsafe_allow_html=True)
+        if st.session_state.kafka_connected:
+            st.markdown("<p style='text-align:right;'><span class='status-live'>🔴 LIVE KAFKA INGEST</span></p>", unsafe_allow_html=True)
+        else:
+            st.markdown("<p style='text-align:right;'><span style='color:#ffc107;'>⏳ WAITING FOR KAFKA</span></p>", unsafe_allow_html=True)
 
 st.divider()
 
-# Ingest new events from background thread
+# ── Handle Ingress Processing ───────────────────────────────────────
 new_messages = []
-while not st.session_state.event_queue.empty():
-    new_messages.append(st.session_state.event_queue.get())
+
+if system_mode == "🚀 Cloud Demo (Auto-Run)":
+    # 1. Cloud simulation pipeline (Self-contained)
+    model, scaler = load_app_resources()
+    sim_df = load_simulation_data()
+    
+    if model is not None and sim_df is not None:
+        if 'sim_index' not in st.session_state:
+            st.session_state.sim_index = 0
+            
+        # Read next row of transaction
+        idx = st.session_state.sim_index
+        row = sim_df.iloc[idx].copy()
+        
+        # Advance index to loop continuously
+        st.session_state.sim_index = (st.session_state.sim_index + 1) % len(sim_df)
+        
+        # Extract features and scale Time/Amount
+        amount = float(row['Amount'])
+        time_val = float(row['Time'])
+        
+        amount_scaled = scaler['amount_scaler'].transform([[amount]])[0][0]
+        time_scaled = scaler['time_scaler'].transform([[time_val]])[0][0]
+        
+        # Organize features V1-V28, Amount_scaled, Time_scaled
+        v_cols = [row[f"V{i}"] for i in range(1, 29)]
+        features = v_cols + [amount_scaled, time_scaled]
+        feature_names = [f"V{i}" for i in range(1, 29)] + ["Amount_scaled", "Time_scaled"]
+        
+        # Run inference directly
+        features_df = pd.DataFrame([features], columns=feature_names)
+        prob = float(model.predict_proba(features_df)[0][1])
+        pred = 1 if prob >= BEST_THRESHOLD else 0
+        risk = "HIGH" if prob >= 0.8 else "MEDIUM" if prob >= 0.5 else "LOW"
+        
+        new_event = {
+            "Time": time_val,
+            "Amount": amount,
+            "Class": int(row['Class']) if 'Class' in row else -1,
+            "fraud_probability": prob,
+            "prediction": pred,
+            "risk_level": risk
+        }
+        new_messages.append(new_event)
+        time.sleep(0.05) # Add soft UI breathing room
+else:
+    # 2. Consume from Kafka queue (Enterprise Mode)
+    while not st.session_state.event_queue.empty():
+        new_messages.append(st.session_state.event_queue.get())
 
 if new_messages:
-    # Prepend new events so recent is top, or append
     st.session_state.transactions.extend(new_messages)
-    # Trim to fit max buffer limit
     if len(st.session_state.transactions) > st.session_state.max_buffer:
         st.session_state.transactions = st.session_state.transactions[-st.session_state.max_buffer:]
 
-# If empty state
+# If empty state (only in Kafka Mode when offline)
 if not st.session_state.transactions:
-    st.info("👋 Live Feed Connected! Waiting for simulated transactions to arrive... Run your `transaction_producer.py` and `spark_fraud_detector.py` to stream events.")
+    st.info("👋 Enterprise Mode Active! Waiting for transactions to arrive from Kafka... Switch to '🚀 Cloud Demo (Auto-Run)' in the sidebar for a fully automated cloud demonstration.")
     
-    st.subheader("💡 System Startup Quickguide")
+    st.subheader("💡 Enterprise Pipeline Quickstart")
     col1, col2, col3 = st.columns(3)
     with col1:
         st.markdown("""
-            **1. Boot Infrastructure**
+            **1. Boot Kafka**
             ```powershell
             docker-compose up -d
             ```
         """)
     with col2:
         st.markdown("""
-            **2. Start Streaming Engine**
+            **2. Start Analytics**
             ```powershell
             python spark_fraud_detector.py
             ```
         """)
     with col3:
         st.markdown("""
-            **3. Start Stream Simulation**
+            **3. Start Ingest**
             ```powershell
             python transaction_producer.py
             ```
         """)
         
-    # Auto-refresh loop to wait for data
     time.sleep(1)
     st.rerun()
 
-# Data is available
+# ── Metrics Calculations ───────────────────────────────────────
 df_events = pd.DataFrame(st.session_state.transactions)
 
-# Metric Calculations
 total_count = len(df_events)
 fraud_cases = df_events[df_events['prediction'] == 1]
 fraud_count = len(fraud_cases)
@@ -265,22 +353,18 @@ col_table, col_plots = st.columns([3, 2])
 with col_table:
     st.subheader("⚡ Live Transaction Feed")
     
-    # Format table for representation
     df_display = df_events.copy()
     
     # Reverse rows so newest transactions are displayed on top
     df_display = df_display.iloc[::-1].reset_index(drop=True)
     
-    # Add human readable styling columns
     df_display['Pred Class'] = df_display['prediction'].apply(lambda x: '🚨 FRAUD' if x == 1 else '✅ Legit')
     
-    # Handle optional Class column for ground truth monitoring
     if 'Class' in df_display.columns:
         df_display['Ground Truth'] = df_display['Class'].apply(
             lambda x: 'FRAUD' if x == 1 else 'Legit' if x == 0 else 'Unknown'
         )
     
-    # Custom display subsets
     cols_to_show = ['Time', 'Amount', 'fraud_probability', 'risk_level', 'Pred Class']
     if 'Ground Truth' in df_display.columns:
         cols_to_show.append('Ground Truth')
@@ -293,7 +377,6 @@ with col_table:
         'risk_level': 'Risk Level'
     })
     
-    # Color highlight function for Streamlit table rows
     def style_fraud_row(val):
         color = 'background-color: #ffcccc; color: #721c24;' if '🚨' in str(val) else ''
         return color
@@ -307,7 +390,6 @@ with col_table:
 with col_plots:
     st.subheader("📈 Threat Distribution & Logs")
     
-    # Generate live probability histogram and risk charts
     tab1, tab2 = st.tabs(["Probability Distribution", "Threat Level Breakdown"])
     
     with tab1:
@@ -331,7 +413,6 @@ with col_plots:
     with tab2:
         fig, ax = plt.subplots(figsize=(6, 3.5))
         risk_counts = df_events['risk_level'].value_counts()
-        # Ensure all columns exist for layout consistency
         for r in ['LOW', 'MEDIUM', 'HIGH']:
             if r not in risk_counts:
                 risk_counts[r] = 0
@@ -346,7 +427,9 @@ with col_plots:
         st.pyplot(fig)
         plt.close()
 
-# Auto-refresh mechanism
-# This re-runs the page every 0.6 seconds to pull new data from background queue
-time.sleep(0.6)
+# Auto-refresh loop
+# In Demo mode, we re-run faster (0.35s) for responsive fluid visual streaming.
+# In Enterprise mode, we pause longer (0.6s) to reduce CPU thread cycles.
+refresh_rate = 0.35 if system_mode == "🚀 Cloud Demo (Auto-Run)" else 0.6
+time.sleep(refresh_rate)
 st.rerun()
