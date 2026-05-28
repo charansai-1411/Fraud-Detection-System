@@ -105,6 +105,7 @@ def load_app_resources():
 @st.cache_data
 def load_simulation_data():
     candidate_files = [
+        "sample_transactions_80_20.csv",
         "sample_transactions_with_fraud(1).csv",
         "sample_transactions (1).csv",
         "sample_transactions.csv"
