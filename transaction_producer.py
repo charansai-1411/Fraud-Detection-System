@@ -35,8 +35,8 @@ def find_sample_csv():
     Finds the sample CSV file in the current directory or parent directory.
     """
     candidate_files = [
-        "sample_transactions (1).csv",
         "sample_transactions_with_fraud(1).csv",
+        "sample_transactions (1).csv",
         "sample_transactions.csv"
     ]
     
